@@ -401,7 +401,7 @@ function AdminApp() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand-block">
-          <div className="brand-mark">A</div>
+          <img className="brand-mark" src="/akzem-logo.jpeg" alt="Akzem Intelligence" />
           <div>
             <div className="brand-name">Akzem</div>
             <div className="brand-subtitle">INTELLIGENCE</div>
@@ -1738,7 +1738,7 @@ function AdminLogin({
   return (
     <main className="auth-page">
       <section className="auth-card">
-        <div className="auth-brand"><div className="brand-mark">A</div><div><strong>Akzem</strong><span>INTELLIGENCE</span></div></div>
+        <div className="auth-brand"><img className="brand-mark" src="/akzem-logo.jpeg" alt="Akzem Intelligence" /><div><strong>Akzem</strong><span>INTELLIGENCE</span></div></div>
         <p className="eyebrow">ESPACE ADMINISTRATEUR</p>
         <h1>Connectez-vous à Akzem.</h1>
         <p className="auth-description">Les prix du terrain, les agents et les rapports sont réservés à l’équipe Akzem.</p>
