@@ -7,8 +7,7 @@ import { buildOperationalReport, operationalReportToCsv } from './lib/operationa
 import { analyzeMarketSignals, toPriceObservation } from './lib/marketIntelligence'
 import './App.css'
 
-type NavKey =
-  | 'dashboard'
+type NavKey =  | 'dashboard'
   | 'farmers'
   | 'farms'
   | 'crop-monitoring'
@@ -1710,13 +1709,17 @@ function AdminLogin({
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [adminConfigured, setAdminConfigured] = useState<boolean | null>(null)
+  const [adminStatusError, setAdminStatusError] = useState('')
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
     requestJson<{ adminConfigured: boolean }>('/api/auth/status')
       .then((payload) => setAdminConfigured(payload.adminConfigured))
-      .catch(() => setAdminConfigured(false))
+      .catch(() => {
+        setAdminConfigured(null)
+        setAdminStatusError('Le service de connexion est indisponible. Réessayez dans quelques instants ou vérifiez le déploiement de l’API.')
+      })
   }, [])
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -1744,8 +1747,12 @@ function AdminLogin({
         <p className="auth-description">Les prix du terrain, les agents et les rapports sont réservés à l’équipe Akzem.</p>
         {user?.role === 'agent' ? (
           <div className="setup-message"><p>Cette session est un compte agent. Les agents n’ont pas accès à l’espace administrateur.</p><button type="button" className="secondary-button" onClick={() => void onSignOut()}>Changer de compte</button></div>
+        ) : adminStatusError ? (
+          <div className="setup-message" role="alert"><h2>Service indisponible</h2><p>{adminStatusError}</p></div>
         ) : adminConfigured === false ? (
-          <div className="setup-message"><h2>Configurez le premier administrateur</h2><p>Dans le fichier <code>.env</code> du projet, définissez <code>AKZEM_ADMIN_EMAIL</code> et un mot de passe de 16 caractères ou plus, puis redémarrez le serveur.</p></div>
+          <div className="setup-message"><h2>Configurez le premier administrateur</h2><p>Sur Vercel, définissez <code>AKZEM_ADMIN_EMAIL</code> et <code>AKZEM_ADMIN_PASSWORD</code> (16 caractères minimum) dans les variables d’environnement de Production, avec <code>DATABASE_URL</code>, puis redéployez. En local, définissez-les dans <code>.env</code> et redémarrez le serveur.</p></div>
+        ) : adminConfigured === null ? (
+          <div className="setup-message" role="status">Vérification de la configuration…</div>
         ) : (
           <form className="auth-form" onSubmit={(event) => void submit(event)}>
             <label className="field"><span>Email administrateur</span><input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
