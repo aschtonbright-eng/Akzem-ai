@@ -277,8 +277,6 @@ const summaryCards: SummaryCard[] = [
 type SignedInUser = { id: number; email: string; role: 'admin' | 'agent' }
 
 function AdminApp() {
-  const [authUser, setAuthUser] = useState<SignedInUser | null>(null)
-  const [authLoading, setAuthLoading] = useState(true)
   const [activePage, setActivePage] = useState<NavKey>(getHashPage)
   const [farmers, setFarmers] = useState<Farmer[]>(() => {
     if (typeof window === 'undefined') {
@@ -298,16 +296,6 @@ function AdminApp() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(demoFarmers))
     return demoFarmers
   })
-
-  useEffect(() => {
-    let mounted = true
-    fetch('/api/auth/me')
-      .then(async (response) => response.ok ? response.json() as Promise<{ user: SignedInUser }> : null)
-      .then((payload) => { if (mounted) setAuthUser(payload?.user ?? null) })
-      .catch(() => { if (mounted) setAuthUser(null) })
-      .finally(() => { if (mounted) setAuthLoading(false) })
-    return () => { mounted = false }
-  }, [])
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -386,16 +374,6 @@ function AdminApp() {
     }
   }
 
-  const signOut = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
-    setAuthUser(null)
-  }
-
-  if (authLoading) return <div className="auth-loading-screen">Akzem Intelligence</div>
-  if (!authUser || authUser.role !== 'admin') {
-    return <AdminLogin user={authUser} onSignIn={setAuthUser} onSignOut={signOut} />
-  }
-
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -438,10 +416,9 @@ function AdminApp() {
           <div className="user-chip">
             <div className="avatar">AI</div>
             <div>
-              <strong>Administrateur</strong>
-              <span>{authUser.email}</span>
+              <strong>Akzem Intelligence</strong>
+              <span>Accès public</span>
             </div>
-            <button type="button" className="logout-button" onClick={() => void signOut()}>Quitter</button>
           </div>
         </header>
 
@@ -1694,76 +1671,6 @@ function AiAssistantPage() {
         </div>
       </section>
     </PageLayout>
-  )
-}
-
-function AdminLogin({
-  user,
-  onSignIn,
-  onSignOut,
-}: {
-  user: SignedInUser | null
-  onSignIn: (user: SignedInUser) => void
-  onSignOut: () => Promise<void>
-}) {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [adminConfigured, setAdminConfigured] = useState<boolean | null>(null)
-  const [adminStatusError, setAdminStatusError] = useState('')
-  const [error, setError] = useState('')
-  const [isSubmitting, setIsSubmitting] = useState(false)
-
-  useEffect(() => {
-    requestJson<{ adminConfigured: boolean }>('/api/auth/status')
-      .then((payload) => setAdminConfigured(payload.adminConfigured))
-      .catch(() => {
-        setAdminConfigured(null)
-        setAdminStatusError('Le service de connexion est indisponible. Réessayez dans quelques instants ou vérifiez le déploiement de l’API.')
-      })
-  }, [])
-
-  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setError('')
-    setIsSubmitting(true)
-    try {
-      const payload = await requestJson<{ user: SignedInUser }>('/api/auth/login', {
-        method: 'POST', body: JSON.stringify({ email, password, area: 'admin' }),
-      })
-      onSignIn(payload.user)
-    } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : 'Connexion impossible.')
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  return (
-    <main className="auth-page">
-      <section className="auth-card">
-        <div className="auth-brand"><img className="brand-mark" src="/akzem-logo.jpeg" alt="Akzem Intelligence" /><div><strong>Akzem</strong><span>INTELLIGENCE</span></div></div>
-        <p className="eyebrow">ESPACE ADMINISTRATEUR</p>
-        <h1>Connectez-vous à Akzem.</h1>
-        <p className="auth-description">Les prix du terrain, les agents et les rapports sont réservés à l’équipe Akzem.</p>
-        {user?.role === 'agent' ? (
-          <div className="setup-message"><p>Cette session est un compte agent. Les agents n’ont pas accès à l’espace administrateur.</p><button type="button" className="secondary-button" onClick={() => void onSignOut()}>Changer de compte</button></div>
-        ) : adminStatusError ? (
-          <div className="setup-message" role="alert"><h2>Service indisponible</h2><p>{adminStatusError}</p></div>
-        ) : adminConfigured === false ? (
-          <div className="setup-message"><h2>Configurez le premier administrateur</h2><p>Sur Vercel, définissez <code>AKZEM_ADMIN_EMAIL</code> et <code>AKZEM_ADMIN_PASSWORD</code> (16 caractères minimum) dans les variables d’environnement de Production, avec <code>DATABASE_URL</code>, puis redéployez. En local, définissez-les dans <code>.env</code> et redémarrez le serveur.</p></div>
-        ) : adminConfigured === null ? (
-          <div className="setup-message" role="status">Vérification de la configuration…</div>
-        ) : (
-          <form className="auth-form" onSubmit={(event) => void submit(event)}>
-            <label className="field"><span>Email administrateur</span><input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-            <label className="field"><span>Mot de passe</span><input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
-            {error && <p className="auth-error" role="alert">{error}</p>}
-            <button className="primary-button" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Connexion…' : 'Ouvrir le tableau de bord'}</button>
-          </form>
-        )}
-        <a className="auth-agent-link" href="/collect">Vous êtes agent de terrain ? Accéder à votre page privée <span aria-hidden="true">↗</span></a>
-      </section>
-    </main>
   )
 }
 

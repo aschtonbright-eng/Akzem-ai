@@ -5,10 +5,8 @@ import { fileURLToPath } from 'node:url'
 import express from 'express'
 import { database, initializeDatabase } from './database.js'
 import {
-  bootstrapAdminFromEnvironment,
   clearSession,
   findUserByEmail,
-  hasAdminAccount,
   hashOpaqueToken,
   hashPassword,
   isValidEmail,
@@ -21,13 +19,12 @@ import {
 
 const app = express()
 const port = Number.parseInt(process.env.PORT ?? '3001', 10)
-const databaseReady = initializeDatabase().then(bootstrapAdminFromEnvironment)
+const databaseReady = initializeDatabase()
 const apiWindowMs = 60_000
 const apiRequestLimit = 30
 const requestsByIp = new Map()
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 const distDirectory = path.resolve(currentDirectory, '../dist')
-const adminOnly = requireRole('admin')
 const agentOnly = requireRole('agent')
 
 setInterval(() => {
@@ -81,22 +78,14 @@ const getBodyObject = (body) => body && typeof body === 'object' && !Array.isArr
 const cleanText = (value) => typeof value === 'string' ? value.trim() : ''
 const priceUnits = new Set(['kg', 'tas', 'sac', 'panier', 'botte', 'tas de 5', 'autre'])
 
-app.get('/api/auth/status', async (_request, response) => {
-  response.json({ status: 'success', adminConfigured: await hasAdminAccount() })
-})
-
 app.get('/api/auth/me', requireUser, async (request, response) => {
   response.json({ status: 'success', user: request.user })
 })
 
 app.post('/api/auth/login', async (request, response) => {
   const { email, password, area } = request.body ?? {}
-  if (!getBodyObject(request.body) || !isValidEmail(email) || typeof password !== 'string' || password.length > 256 || !['admin', 'agent'].includes(area)) {
+  if (!getBodyObject(request.body) || !isValidEmail(email) || typeof password !== 'string' || password.length > 256 || area !== 'agent') {
     return sendError(response, 400, 'INVALID_REQUEST', 'Enter a valid email and password.')
-  }
-
-  if (area === 'admin' && !(await hasAdminAccount())) {
-    return sendError(response, 503, 'ADMIN_NOT_CONFIGURED', 'Configure AKZEM_ADMIN_EMAIL and AKZEM_ADMIN_PASSWORD in .env before admin sign-in.')
   }
 
   const user = await findUserByEmail(email)
@@ -114,7 +103,7 @@ app.post('/api/auth/logout', async (request, response) => {
   response.json({ status: 'success' })
 })
 
-app.post('/api/admin/invitations', adminOnly, async (request, response) => {
+app.post('/api/admin/invitations', async (request, response) => {
   const email = cleanText(request.body?.email)
   if (!isValidEmail(email)) return sendError(response, 400, 'INVALID_EMAIL', 'Enter a valid email address.')
 
@@ -239,7 +228,7 @@ app.post('/api/collector/observations', agentOnly, async (request, response) => 
   response.status(201).json({ status: 'success', observation: { id: Number(result.lastInsertRowid), observedAt } })
 })
 
-app.get('/api/admin/collectors', adminOnly, async (_request, response) => {
+app.get('/api/admin/collectors', async (_request, response) => {
   const collectors = await database.all(`
     SELECT id, email, is_active AS isActive, created_at AS createdAt, last_login_at AS lastLoginAt
     FROM users WHERE role = 'agent' ORDER BY created_at DESC
@@ -251,7 +240,7 @@ app.get('/api/admin/collectors', adminOnly, async (_request, response) => {
   response.json({ status: 'success', collectors, invitations })
 })
 
-app.patch('/api/admin/collectors/:id', adminOnly, async (request, response) => {
+app.patch('/api/admin/collectors/:id', async (request, response) => {
   const id = Number(request.params.id)
   const isActive = request.body?.isActive
   if (!Number.isSafeInteger(id) || typeof isActive !== 'boolean') return sendError(response, 400, 'INVALID_REQUEST', 'Choose whether this collector account is active.')
@@ -261,12 +250,12 @@ app.patch('/api/admin/collectors/:id', adminOnly, async (request, response) => {
   response.json({ status: 'success' })
 })
 
-app.get('/api/admin/commodities', adminOnly, async (_request, response) => {
+app.get('/api/admin/commodities', async (_request, response) => {
   const commodities = await database.all('SELECT id, name, is_active AS isActive FROM commodities ORDER BY name COLLATE NOCASE')
   response.json({ status: 'success', commodities })
 })
 
-app.post('/api/admin/commodities', adminOnly, async (request, response) => {
+app.post('/api/admin/commodities', async (request, response) => {
   const name = cleanText(request.body?.name)
   if (name.length < 2 || name.length > 80) return sendError(response, 400, 'INVALID_PRODUCT', 'Product names must have between 2 and 80 characters.')
   try {
@@ -278,7 +267,7 @@ app.post('/api/admin/commodities', adminOnly, async (request, response) => {
   }
 })
 
-app.patch('/api/admin/commodities/:id', adminOnly, async (request, response) => {
+app.patch('/api/admin/commodities/:id', async (request, response) => {
   const id = Number(request.params.id)
   const isActive = request.body?.isActive
   if (!Number.isSafeInteger(id) || typeof isActive !== 'boolean') return sendError(response, 400, 'INVALID_REQUEST', 'Choose whether this product is active.')
@@ -287,7 +276,7 @@ app.patch('/api/admin/commodities/:id', adminOnly, async (request, response) => 
   response.json({ status: 'success' })
 })
 
-app.get('/api/admin/market-observations', adminOnly, async (_request, response) => {
+app.get('/api/admin/market-observations', async (_request, response) => {
   const observations = await database.all(`
     SELECT observations.id, observations.market_name AS marketName, observations.city,
       observations.availability, observations.price_min AS priceMin, observations.price_max AS priceMax,
@@ -350,7 +339,7 @@ async function processWithAi({ query, context }) {
   }
 }
 
-app.post('/api/akzem-intelligence/query', adminOnly, async (request, response) => {
+app.post('/api/akzem-intelligence/query', async (request, response) => {
   const body = request.body
   if (!getBodyObject(body)) return sendError(response, 400, 'INVALID_REQUEST', 'Request body must be a JSON object.')
   let query

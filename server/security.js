@@ -25,24 +25,6 @@ export function verifyPassword(password, salt, expectedHash) {
   } catch { return false }
 }
 
-export async function bootstrapAdminFromEnvironment() {
-  const email = process.env.AKZEM_ADMIN_EMAIL?.trim() ?? ''
-  const password = process.env.AKZEM_ADMIN_PASSWORD ?? ''
-  if (!email && !password) return false
-  if (!isValidEmail(email) || password.length < 16) throw new Error('Set a valid AKZEM_ADMIN_EMAIL and an AKZEM_ADMIN_PASSWORD of at least 16 characters.')
-  const normalizedEmail = normalizeEmail(email)
-  const existing = await database.get('SELECT id, role FROM users WHERE email = ?', [normalizedEmail])
-  if (existing && existing.role !== 'admin') throw new Error('AKZEM_ADMIN_EMAIL is already assigned to a collector account; choose a different administrator email.')
-  const { salt, hash } = hashPassword(password)
-  if (existing) await database.run('UPDATE users SET password_salt = ?, password_hash = ?, is_active = 1 WHERE id = ?', [salt, hash, existing.id])
-  else await database.run("INSERT INTO users (email, password_salt, password_hash, role, created_at) VALUES (?, ?, ?, 'admin', ?)", [normalizedEmail, salt, hash, Date.now()])
-  return true
-}
-
-export async function hasAdminAccount() {
-  return Boolean(await database.get("SELECT id FROM users WHERE role = 'admin' AND is_active = 1 LIMIT 1"))
-}
-
 export async function issueSession(userId, response) {
   const token = randomBytes(32).toString('base64url')
   const expiresAt = Date.now() + sessionLifetimeMs
