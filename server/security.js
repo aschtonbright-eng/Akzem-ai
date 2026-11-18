@@ -48,7 +48,7 @@ async function getAuthenticatedUser(request) {
   const token = readCookie(request, sessionCookieName)
   if (!token) return null
   const session = await database.get(`
-    SELECT users.id, users.email, users.role, users.is_active AS isActive,
+    SELECT users.id, users.email, users.name, users.phone, users.role, users.is_active AS isActive,
       sessions.expires_at AS expiresAt, sessions.token_hash AS tokenHash
     FROM sessions JOIN users ON users.id = sessions.user_id WHERE sessions.token_hash = ?
   `, [hashToken(token)])
@@ -57,7 +57,7 @@ async function getAuthenticatedUser(request) {
     await database.run('DELETE FROM sessions WHERE token_hash = ?', [session.tokenHash])
     return null
   }
-  return { id: session.id, email: session.email, role: session.role }
+  return { id: session.id, email: session.email, name: session.name, phone: session.phone, role: session.role }
 }
 
 export async function requireUser(request, response, next) {
@@ -78,7 +78,19 @@ export function requireRole(role) {
 }
 
 export async function findUserByEmail(email) {
-  return database.get('SELECT id, email, password_salt AS passwordSalt, password_hash AS passwordHash, role, is_active AS isActive FROM users WHERE email = ?', [normalizeEmail(email)])
+  return database.get('SELECT id, email, name, phone, password_salt AS passwordSalt, password_hash AS passwordHash, role, is_active AS isActive FROM users WHERE email = ?', [normalizeEmail(email)])
+}
+
+export const normalizeUserPhone = (phone) => phone.replace(/\D/g, '')
+
+export function isValidPhone(phone) {
+  if (typeof phone !== 'string') return false
+  const normalized = normalizeUserPhone(phone)
+  return normalized.length >= 7 && normalized.length <= 15
+}
+
+export async function findUserByPhone(phone) {
+  return database.get('SELECT id, email, name, phone, password_salt AS passwordSalt, password_hash AS passwordHash, role, is_active AS isActive FROM users WHERE phone = ?', [normalizeUserPhone(phone)])
 }
 
 export function normalizeUserEmail(email) { return normalizeEmail(email) }

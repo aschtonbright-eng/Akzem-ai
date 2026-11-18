@@ -10,11 +10,11 @@ let sqlite
 let pool
 
 const postgresSchema = [
-  "CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('admin','agent')), is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at BIGINT NOT NULL, last_login_at BIGINT)",
+  "CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY, email TEXT UNIQUE, name TEXT, phone TEXT, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('admin','agent')), is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at BIGINT NOT NULL, last_login_at BIGINT)",
   'CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at BIGINT NOT NULL)',
   'CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at)',
   'CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id)',
-  'CREATE TABLE IF NOT EXISTS agent_invitations (id BIGSERIAL PRIMARY KEY, email TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_by BIGINT NOT NULL REFERENCES users(id), created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, used_at BIGINT)',
+  'CREATE TABLE IF NOT EXISTS agent_invitations (id BIGSERIAL PRIMARY KEY, email TEXT, name TEXT NOT NULL, phone TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_by BIGINT REFERENCES users(id), created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, used_at BIGINT)',
   'CREATE INDEX IF NOT EXISTS invitations_expiry_idx ON agent_invitations(expires_at)',
   'CREATE TABLE IF NOT EXISTS commodities (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE, is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at BIGINT NOT NULL)',
   "CREATE TABLE IF NOT EXISTS market_observations (id BIGSERIAL PRIMARY KEY, agent_id BIGINT NOT NULL REFERENCES users(id), commodity_id BIGINT NOT NULL REFERENCES commodities(id), market_name TEXT NOT NULL, city TEXT NOT NULL, availability TEXT NOT NULL CHECK (availability IN ('available','unavailable')), price_min INTEGER, price_max INTEGER, price_unit TEXT, comment TEXT NOT NULL DEFAULT '', observed_at BIGINT NOT NULL, CHECK ((availability = 'available' AND price_min IS NOT NULL AND price_max IS NOT NULL AND price_min > 0 AND price_max >= price_min) OR (availability = 'unavailable' AND price_min IS NULL AND price_max IS NULL AND price_unit IS NULL)))",
@@ -124,6 +124,15 @@ export async function initializeDatabase() {
       connectionTimeoutMillis: 10_000,
     })
     for (const statement of postgresSchema) await pool.query(statement)
+    await pool.query('ALTER TABLE users ALTER COLUMN email DROP NOT NULL')
+    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT')
+    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT')
+    await pool.query('ALTER TABLE agent_invitations ALTER COLUMN email DROP NOT NULL')
+    await pool.query('ALTER TABLE agent_invitations ADD COLUMN IF NOT EXISTS name TEXT')
+    await pool.query('ALTER TABLE agent_invitations ADD COLUMN IF NOT EXISTS phone TEXT')
+    await pool.query('ALTER TABLE agent_invitations ALTER COLUMN created_by DROP NOT NULL')
+    await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique_idx ON users(phone) WHERE phone IS NOT NULL')
+    await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS invitations_phone_pending_unique_idx ON agent_invitations(phone) WHERE phone IS NOT NULL AND used_at IS NULL')
   } else {
     if (process.env.VERCEL) throw new Error('DATABASE_URL is required on Vercel. Configure a hosted PostgreSQL database.')
     const databasePath = process.env.AKZEM_DATABASE_PATH ?? path.resolve(serverDirectory, '../data/akzem.sqlite')
@@ -131,15 +140,35 @@ export async function initializeDatabase() {
     sqlite = new DatabaseSync(databasePath)
     sqlite.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;')
     sqlite.exec(`
-      CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('admin','agent')), is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1)), created_at INTEGER NOT NULL, last_login_at INTEGER);
+      CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT UNIQUE COLLATE NOCASE, name TEXT, phone TEXT, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('admin','agent')), is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1)), created_at INTEGER NOT NULL, last_login_at INTEGER);
       CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at); CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
-      CREATE TABLE IF NOT EXISTS agent_invitations (id INTEGER PRIMARY KEY, email TEXT NOT NULL COLLATE NOCASE, token_hash TEXT NOT NULL UNIQUE, created_by INTEGER NOT NULL REFERENCES users(id), created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER);
+      CREATE TABLE IF NOT EXISTS agent_invitations (id INTEGER PRIMARY KEY, email TEXT COLLATE NOCASE, name TEXT NOT NULL, phone TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_by INTEGER REFERENCES users(id), created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER);
       CREATE INDEX IF NOT EXISTS invitations_expiry_idx ON agent_invitations(expires_at);
       CREATE TABLE IF NOT EXISTS commodities (id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1)), created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS market_observations (id INTEGER PRIMARY KEY, agent_id INTEGER NOT NULL REFERENCES users(id), commodity_id INTEGER NOT NULL REFERENCES commodities(id), market_name TEXT NOT NULL, city TEXT NOT NULL, availability TEXT NOT NULL CHECK (availability IN ('available','unavailable')), price_min INTEGER, price_max INTEGER, price_unit TEXT, comment TEXT NOT NULL DEFAULT '', observed_at INTEGER NOT NULL, CHECK ((availability = 'available' AND price_min IS NOT NULL AND price_max IS NOT NULL AND price_min > 0 AND price_max >= price_min) OR (availability = 'unavailable' AND price_min IS NULL AND price_max IS NULL AND price_unit IS NULL)));
       CREATE INDEX IF NOT EXISTS observations_date_idx ON market_observations(observed_at DESC); CREATE INDEX IF NOT EXISTS observations_agent_idx ON market_observations(agent_id, observed_at DESC); CREATE INDEX IF NOT EXISTS observations_commodity_idx ON market_observations(commodity_id, observed_at DESC);
     `)
+    const userColumns = sqlite.prepare('PRAGMA table_info(users)').all()
+    if (userColumns.find((column) => column.name === 'email')?.notnull) {
+      sqlite.exec(`PRAGMA foreign_keys = OFF;
+        CREATE TABLE users_new (id INTEGER PRIMARY KEY, email TEXT UNIQUE COLLATE NOCASE, name TEXT, phone TEXT, password_salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('admin','agent')), is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1)), created_at INTEGER NOT NULL, last_login_at INTEGER);
+        INSERT INTO users_new (id,email,password_salt,password_hash,role,is_active,created_at,last_login_at) SELECT id,email,password_salt,password_hash,role,is_active,created_at,last_login_at FROM users;
+        DROP TABLE users;
+        ALTER TABLE users_new RENAME TO users;
+        PRAGMA foreign_keys = ON;`)
+    }
+    const invitationColumns = sqlite.prepare('PRAGMA table_info(agent_invitations)').all()
+    if (!invitationColumns.some((column) => column.name === 'name')) {
+      sqlite.exec(`PRAGMA foreign_keys = OFF;
+        CREATE TABLE invitations_new (id INTEGER PRIMARY KEY, email TEXT COLLATE NOCASE, name TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, created_by INTEGER REFERENCES users(id), created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER);
+        INSERT INTO invitations_new (id,email,token_hash,created_by,created_at,expires_at,used_at) SELECT id,email,token_hash,created_by,created_at,expires_at,used_at FROM agent_invitations;
+        DROP TABLE agent_invitations;
+        ALTER TABLE invitations_new RENAME TO agent_invitations;
+        CREATE INDEX IF NOT EXISTS invitations_expiry_idx ON agent_invitations(expires_at);
+        PRAGMA foreign_keys = ON;`)
+    }
+    sqlite.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique_idx ON users(phone) WHERE phone IS NOT NULL; CREATE UNIQUE INDEX IF NOT EXISTS invitations_phone_pending_unique_idx ON agent_invitations(phone) WHERE phone IS NOT NULL AND used_at IS NULL;')
   }
 
   for (const name of ['Tomates','Oignons','Pommes de terre','Maïs','Plantain','Manioc','Haricots','Piment','Carottes','Poivrons']) {

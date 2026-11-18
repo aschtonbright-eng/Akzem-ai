@@ -274,7 +274,7 @@ const summaryCards: SummaryCard[] = [
   { title: 'Récoltes prévues', value: '03', detail: 'Dans les 30 prochains jours', tone: 'purple' },
 ]
 
-type SignedInUser = { id: number; email: string; role: 'admin' | 'agent' }
+type SignedInUser = { id: number; email: string | null; name?: string | null; phone?: string | null; role: 'admin' | 'agent' }
 
 function AdminApp() {
   const [activePage, setActivePage] = useState<NavKey>(getHashPage)
@@ -1161,8 +1161,8 @@ function HarvestForecastsPage({ cropCycles }: { cropCycles: CropMonitoringCycle[
 }
 
 type MarketCommodity = { id: number; name: string; isActive: boolean }
-type MarketCollector = { id: number; email: string; isActive: boolean; createdAt: number; lastLoginAt: number | null }
-type MarketInvitation = { email: string; createdAt: number; expiresAt: number }
+type MarketCollector = { id: number; email: string | null; name: string | null; phone: string | null; isActive: boolean; createdAt: number; lastLoginAt: number | null }
+type MarketInvitation = { email: string | null; name: string; phone: string; createdAt: number; expiresAt: number }
 type MarketObservation = {
   id: number
   commodity: string
@@ -1174,7 +1174,7 @@ type MarketObservation = {
   priceUnit: string | null
   comment: string
   observedAt: number
-  agentEmail: string
+  agentName: string
 }
 
 async function requestJson<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -1207,7 +1207,8 @@ function MarketPricesPage() {
   const [commodities, setCommodities] = useState<MarketCommodity[]>([])
   const [collectors, setCollectors] = useState<MarketCollector[]>([])
   const [invitations, setInvitations] = useState<MarketInvitation[]>([])
-  const [email, setEmail] = useState('')
+  const [agentName, setAgentName] = useState('')
+  const [agentPhone, setAgentPhone] = useState('')
   const [newCommodity, setNewCommodity] = useState('')
   const [inviteUrl, setInviteUrl] = useState('')
   const [notice, setNotice] = useState('')
@@ -1253,11 +1254,17 @@ function MarketPricesPage() {
     setIsWorking(true)
     try {
       const payload = await requestJson<{ invitation: { inviteUrl: string } }>('/api/admin/invitations', {
-        method: 'POST', body: JSON.stringify({ email }),
+        method: 'POST', body: JSON.stringify({ name: agentName, phone: agentPhone }),
       })
       setInviteUrl(payload.invitation.inviteUrl)
-      setNotice('Lien créé. Copiez-le et envoyez-le à cet agent par le canal de votre choix.')
-      setEmail('')
+      setAgentName('')
+      setAgentPhone('')
+      try {
+        await navigator.clipboard.writeText(payload.invitation.inviteUrl)
+        setNotice('Lien créé et copié. Vous pouvez le partager par SMS ou WhatsApp.')
+      } catch {
+        setNotice('Lien créé. Utilisez le bouton pour le copier et le partager par SMS ou WhatsApp.')
+      }
       await refresh()
     } catch (inviteError) {
       setError(inviteError instanceof Error ? inviteError.message : 'Impossible de créer le lien.')
@@ -1307,7 +1314,7 @@ function MarketPricesPage() {
   const copyInvitation = async () => {
     try {
       await navigator.clipboard.writeText(inviteUrl)
-      setNotice('Lien copié. Vous pouvez le coller dans votre email.')
+      setNotice('Lien copié. Vous pouvez le partager par SMS ou WhatsApp.')
     } catch {
       setNotice('Sélectionnez le lien et copiez-le pour le partager.')
     }
@@ -1329,10 +1336,11 @@ function MarketPricesPage() {
         <article className="info-card market-admin-card">
           <div className="panel-header"><div><h3>Inviter un agent</h3><p>Le lien est à usage unique et expire sous 7 jours.</p></div><span className="mini-icon">✉️</span></div>
           <form className="inline-admin-form" onSubmit={(event) => void createInvitation(event)}>
-            <label className="field"><span>Email de l’agent</span><input type="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="agent@exemple.cm" /></label>
+            <label className="field"><span>Nom de l’agent</span><input required minLength={2} maxLength={120} value={agentName} onChange={(event) => setAgentName(event.target.value)} placeholder="Nom complet" /></label>
+            <label className="field"><span>Téléphone de l’agent</span><input type="tel" autoComplete="tel" required minLength={7} maxLength={24} value={agentPhone} onChange={(event) => setAgentPhone(event.target.value)} placeholder="+237 6XX XXX XXX" /></label>
             <button className="primary-button" type="submit" disabled={isWorking}>{isWorking ? 'Création…' : 'Créer le lien privé'}</button>
           </form>
-          {inviteUrl && <div className="invite-result"><label className="field"><span>Lien à partager par email</span><input readOnly value={inviteUrl} onFocus={(event) => event.currentTarget.select()} /></label><button className="secondary-button" type="button" onClick={() => void copyInvitation()}>Copier le lien</button></div>}
+          {inviteUrl && <div className="invite-result"><label className="field"><span>Lien privé à partager</span><input readOnly value={inviteUrl} onFocus={(event) => event.currentTarget.select()} /></label><button className="secondary-button" type="button" onClick={() => void copyInvitation()}>Copier le lien</button></div>}
           <p className="privacy-note">Chaque agent crée son mot de passe après avoir ouvert son invitation. Aucun accès public ni inscription libre.</p>
         </article>
 
@@ -1350,15 +1358,15 @@ function MarketPricesPage() {
 
       <article className="info-card collector-admin-card">
         <div className="panel-header"><div><h3>Accès des agents</h3><p>Suspendez immédiatement un accès si nécessaire.</p></div></div>
-        {collectors.length > 0 ? <div className="collector-list">{collectors.map((collector) => <div className="collector-row" key={collector.id}><div><strong>{collector.email}</strong><span>{collector.lastLoginAt ? `Dernière connexion : ${formatMarketDate(collector.lastLoginAt)}` : `Invité le ${formatMarketDate(collector.createdAt)}`}</span></div><button type="button" className={collector.isActive ? 'mini-toggle on' : 'mini-toggle'} onClick={() => void updateCollector(collector)}>{collector.isActive ? 'Accès actif' : 'Réactiver'}</button></div>)}</div> : <div className="empty-state-box compact-box"><p>Aucun agent n’a encore activé son invitation.</p></div>}
-        {invitations.length > 0 && <div className="pending-invitations"><strong>Invitations en attente</strong>{invitations.map((invitation) => <div className="admin-list-row" key={invitation.email}><span>{invitation.email}</span><small>Expire le {formatMarketDate(invitation.expiresAt)}</small></div>)}</div>}
+        {collectors.length > 0 ? <div className="collector-list">{collectors.map((collector) => <div className="collector-row" key={collector.id}><div><strong>{collector.name || collector.email || collector.phone || 'Agent'}</strong><span>{collector.phone && `${collector.phone} · `}{collector.lastLoginAt ? `Dernière connexion : ${formatMarketDate(collector.lastLoginAt)}` : `Invité le ${formatMarketDate(collector.createdAt)}`}</span></div><button type="button" className={collector.isActive ? 'mini-toggle on' : 'mini-toggle'} onClick={() => void updateCollector(collector)}>{collector.isActive ? 'Accès actif' : 'Réactiver'}</button></div>)}</div> : <div className="empty-state-box compact-box"><p>Aucun agent n’a encore activé son invitation.</p></div>}
+        {invitations.length > 0 && <div className="pending-invitations"><strong>Invitations en attente</strong>{invitations.map((invitation, index) => <div className="admin-list-row" key={invitation.phone || invitation.email || index}><span>{invitation.name ? `${invitation.name} · ${invitation.phone || invitation.email || ''}` : invitation.email || 'Invitation ancienne'}</span><small>Expire le {formatMarketDate(invitation.expiresAt)}</small></div>)}</div>}
       </article>
 
       <article className="info-card observation-admin-card">
         <div className="panel-header"><div><h3>Relevés du terrain</h3><p>Les agents ne voient ni ce tableau ni les relevés des autres agents.</p></div><span className="panel-tag">{observations.length} affiché{observations.length === 1 ? '' : 's'}</span></div>
         {isLoading ? <div className="empty-state-box compact-box"><p>Chargement des relevés…</p></div> : observations.length > 0 ? (
           <div className="table-card report-table-wrap market-observation-wrap"><table className="report-table"><thead><tr><th>Date</th><th>Produit</th><th>Marché / ville</th><th>Disponibilité</th><th>Prix observé</th><th>Agent</th><th>Commentaire</th></tr></thead><tbody>
-            {observations.map((observation) => <tr key={observation.id}><td>{formatMarketDate(observation.observedAt)}</td><td>{observation.commodity}</td><td>{observation.marketName}<br /><small>{observation.city}</small></td><td><span className={`badge ${observation.availability === 'available' ? 'success' : 'warning'}`}>{observation.availability === 'available' ? 'Disponible' : 'Indisponible'}</span></td><td>{formatMarketPrice(observation.priceMin, observation.priceMax, observation.priceUnit)}</td><td>{observation.agentEmail}</td><td>{observation.comment || '—'}</td></tr>)}
+            {observations.map((observation) => <tr key={observation.id}><td>{formatMarketDate(observation.observedAt)}</td><td>{observation.commodity}</td><td>{observation.marketName}<br /><small>{observation.city}</small></td><td><span className={`badge ${observation.availability === 'available' ? 'success' : 'warning'}`}>{observation.availability === 'available' ? 'Disponible' : 'Indisponible'}</span></td><td>{formatMarketPrice(observation.priceMin, observation.priceMax, observation.priceUnit)}</td><td>{observation.agentName}</td><td>{observation.comment || '—'}</td></tr>)}
           </tbody></table></div>
         ) : <div className="empty-state-box compact-box"><p>Aucun relevé reçu. Créez une invitation pour commencer la collecte.</p></div>}
       </article>
@@ -1678,9 +1686,9 @@ function CollectorPortal() {
   const [user, setUser] = useState<SignedInUser | null>(null)
   const [isChecking, setIsChecking] = useState(true)
   const [inviteToken, setInviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite') ?? '')
-  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteAgent, setInviteAgent] = useState<{ name: string; phone: string } | null>(null)
   const [inviteError, setInviteError] = useState('')
-  const [email, setEmail] = useState('')
+  const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
   const [passwordConfirm, setPasswordConfirm] = useState('')
   const [error, setError] = useState('')
@@ -1708,8 +1716,8 @@ function CollectorPortal() {
       }
       if (inviteToken) {
         try {
-          const payload = await requestJson<{ invitation: { email: string } }>(`/api/collector/invitations/${encodeURIComponent(inviteToken)}`)
-          if (mounted) { setInviteEmail(payload.invitation.email); setInviteError('') }
+          const payload = await requestJson<{ invitation: { name: string | null; phone: string | null } }>(`/api/collector/invitations/${encodeURIComponent(inviteToken)}`)
+          if (mounted) { setInviteAgent({ name: payload.invitation.name || 'Agent', phone: payload.invitation.phone || '' }); setInviteError('') }
         } catch (inviteLookupError) {
           if (mounted) setInviteError(inviteLookupError instanceof Error ? inviteLookupError.message : 'Cette invitation est invalide ou expirée.')
         }
@@ -1741,7 +1749,7 @@ function CollectorPortal() {
     setIsSubmitting(true)
     try {
       const payload = await requestJson<{ user: SignedInUser }>('/api/auth/login', {
-        method: 'POST', body: JSON.stringify({ email, password, area: 'agent' }),
+        method: 'POST', body: JSON.stringify({ phone, password, area: 'agent' }),
       })
       setUser(payload.user)
       setPassword('')
@@ -1816,9 +1824,9 @@ function CollectorPortal() {
           <p className="auth-description">Une page simple pour transmettre les prix observés. Les données et les autres sections d’Akzem ne sont pas accessibles depuis cet espace.</p>
           {inviteToken ? (
             <>
-              <div className="invited-email"><span>Invitation envoyée à</span><strong>{inviteEmail || 'Vérification…'}</strong></div>
+              <div className="invited-email"><span>Accès agent créé pour</span><strong>{inviteAgent ? `${inviteAgent.name} · ${inviteAgent.phone || 'Téléphone lié à l’invitation'}` : 'Vérification…'}</strong></div>
               {inviteError && <p className="auth-error" role="alert">{inviteError}</p>}
-              {!inviteError && inviteEmail && <form className="auth-form" onSubmit={(event) => void acceptInvitation(event)}>
+              {!inviteError && inviteAgent && <form className="auth-form" onSubmit={(event) => void acceptInvitation(event)}>
                 <label className="field"><span>Créer votre mot de passe</span><input type="password" autoComplete="new-password" minLength={12} maxLength={256} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
                 <label className="field"><span>Confirmer le mot de passe</span><input type="password" autoComplete="new-password" minLength={12} maxLength={256} required value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} /></label>
                 {error && <p className="auth-error" role="alert">{error}</p>}
@@ -1828,7 +1836,7 @@ function CollectorPortal() {
             </>
           ) : (
             <form className="auth-form" onSubmit={(event) => void handleLogin(event)}>
-              <label className="field"><span>Email</span><input type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+              <label className="field"><span>Téléphone</span><input type="text" inputMode="tel" autoComplete="username" required value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+237 6XX XXX XXX" /></label>
               <label className="field"><span>Mot de passe</span><input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
               {error && <p className="auth-error" role="alert">{error}</p>}
               <button type="submit" className="primary-button" disabled={isSubmitting}>{isSubmitting ? 'Connexion…' : 'Ouvrir le formulaire de collecte'}</button>
@@ -1838,7 +1846,7 @@ function CollectorPortal() {
         </section>
       ) : (
         <section className="collector-form-card">
-          <div className="collector-welcome"><p className="eyebrow">RELEVÉ DE MARCHÉ</p><h1>Bonjour, {user.email}</h1><p>Renseignez ce que vous observez aujourd’hui. Le relevé sera transmis à l’équipe Akzem.</p></div>
+          <div className="collector-welcome"><p className="eyebrow">RELEVÉ DE MARCHÉ</p><h1>Bonjour, {user.name || user.phone || user.email}</h1><p>Renseignez ce que vous observez aujourd’hui. Le relevé sera transmis à l’équipe Akzem.</p></div>
           {error && <div className="form-error-banner" role="alert">{error}</div>}
           {notice && <div className="success-banner" role="status">{notice}</div>}
           <form className="collector-observation-form" onSubmit={(event) => void submitObservation(event)}>

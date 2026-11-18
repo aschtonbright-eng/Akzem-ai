@@ -7,14 +7,17 @@ import { database, initializeDatabase } from './database.js'
 import {
   clearSession,
   findUserByEmail,
+  findUserByPhone,
   hashOpaqueToken,
   hashPassword,
   isValidEmail,
   issueSession,
   normalizeUserEmail,
+  normalizeUserPhone,
   requireRole,
   requireUser,
   verifyPassword,
+  isValidPhone,
 } from './security.js'
 
 const app = express()
@@ -83,19 +86,20 @@ app.get('/api/auth/me', requireUser, async (request, response) => {
 })
 
 app.post('/api/auth/login', async (request, response) => {
-  const { email, password, area } = request.body ?? {}
-  if (!getBodyObject(request.body) || !isValidEmail(email) || typeof password !== 'string' || password.length > 256 || area !== 'agent') {
-    return sendError(response, 400, 'INVALID_REQUEST', 'Enter a valid email and password.')
+  const { email, phone, password, area } = request.body ?? {}
+  const identifier = cleanText(phone || email)
+  if (!getBodyObject(request.body) || !(identifier.includes('@') ? isValidEmail(identifier) : isValidPhone(identifier)) || typeof password !== 'string' || password.length > 256 || area !== 'agent') {
+    return sendError(response, 400, 'INVALID_REQUEST', 'Enter a valid phone number and password.')
   }
 
-  const user = await findUserByEmail(email)
+  const user = identifier.includes('@') ? await findUserByEmail(identifier) : await findUserByPhone(identifier)
   if (!user || !user.isActive || user.role !== area || !verifyPassword(password, user.passwordSalt, user.passwordHash)) {
-    return sendError(response, 401, 'INVALID_CREDENTIALS', 'Email or password is incorrect.')
+    return sendError(response, 401, 'INVALID_CREDENTIALS', 'Phone number or password is incorrect.')
   }
 
   await database.run('UPDATE users SET last_login_at = ? WHERE id = ?', Date.now(), user.id)
   await issueSession(user.id, response)
-  return response.json({ status: 'success', user: { id: user.id, email: user.email, role: user.role } })
+  return response.json({ status: 'success', user: { id: user.id, email: user.email, name: user.name, phone: user.phone, role: user.role } })
 })
 
 app.post('/api/auth/logout', async (request, response) => {
@@ -104,21 +108,23 @@ app.post('/api/auth/logout', async (request, response) => {
 })
 
 app.post('/api/admin/invitations', async (request, response) => {
-  const email = cleanText(request.body?.email)
-  if (!isValidEmail(email)) return sendError(response, 400, 'INVALID_EMAIL', 'Enter a valid email address.')
+  const name = cleanText(request.body?.name)
+  const phone = cleanText(request.body?.phone)
+  if (name.length < 2 || name.length > 120) return sendError(response, 400, 'INVALID_NAME', 'Enter an agent name between 2 and 120 characters.')
+  if (!isValidPhone(phone)) return sendError(response, 400, 'INVALID_PHONE', 'Enter a valid phone number with 7 to 15 digits.')
 
-  const normalizedEmail = normalizeUserEmail(email)
-  const existingUser = await database.get('SELECT id FROM users WHERE email = ?', normalizedEmail)
-  if (existingUser) return sendError(response, 409, 'EMAIL_ALREADY_REGISTERED', 'An account with this email already exists.')
+  const normalizedPhone = normalizeUserPhone(phone)
+  const existingUser = await database.get('SELECT id FROM users WHERE phone = ?', normalizedPhone)
+  if (existingUser) return sendError(response, 409, 'PHONE_ALREADY_REGISTERED', 'An account with this phone number already exists.')
 
   const token = randomBytes(32).toString('base64url')
   const now = Date.now()
   const expiresAt = now + 7 * 24 * 60 * 60 * 1000
-  await database.run('DELETE FROM agent_invitations WHERE email = ? COLLATE NOCASE AND used_at IS NULL', normalizedEmail)
+  await database.run('DELETE FROM agent_invitations WHERE phone = ? AND used_at IS NULL', normalizedPhone)
   await database.run(`
-    INSERT INTO agent_invitations (email, token_hash, created_by, created_at, expires_at)
-    VALUES (?, ?, ?, ?, ?)
-  `, normalizedEmail, hashOpaqueToken(token), request.user.id, now, expiresAt)
+    INSERT INTO agent_invitations (email, name, phone, token_hash, created_by, created_at, expires_at)
+    VALUES (NULL, ?, ?, ?, ?, ?, ?)
+  `, name, normalizedPhone, hashOpaqueToken(token), request.user?.id ?? null, now, expiresAt)
 
   const baseUrl = process.env.APP_BASE_URL?.trim() || `${request.protocol}://${request.get('host')}`
   let inviteUrl
@@ -130,14 +136,14 @@ app.post('/api/admin/invitations', async (request, response) => {
     return sendError(response, 500, 'APP_URL_INVALID', 'Set a valid APP_BASE_URL in .env before creating invitations.')
   }
 
-  return response.status(201).json({ status: 'success', invitation: { email: normalizedEmail, inviteUrl, expiresAt } })
+  return response.status(201).json({ status: 'success', invitation: { name, phone: normalizedPhone, inviteUrl, expiresAt } })
 })
 
 app.get('/api/collector/invitations/:token', async (request, response) => {
   const token = request.params.token
   if (!/^[a-zA-Z0-9_-]{40,60}$/.test(token)) return sendError(response, 404, 'INVITATION_NOT_FOUND', 'This invitation is invalid or expired.')
   const invitation = await database.get(`
-    SELECT email, expires_at AS expiresAt
+    SELECT email, name, phone, expires_at AS expiresAt
     FROM agent_invitations
     WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
   `, hashOpaqueToken(token), Date.now())
@@ -152,12 +158,12 @@ app.post('/api/collector/accept-invitation', async (request, response) => {
   }
 
   const invitation = await database.get(`
-    SELECT id, email FROM agent_invitations
+    SELECT id, email, name, phone FROM agent_invitations
     WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
   `, hashOpaqueToken(token), Date.now())
   if (!invitation) return sendError(response, 410, 'INVITATION_EXPIRED', 'This invitation is invalid, expired, or already used. Ask an Akzem administrator for a new link.')
-  if (await database.get('SELECT id FROM users WHERE email = ?', invitation.email)) {
-    return sendError(response, 409, 'EMAIL_ALREADY_REGISTERED', 'This email already has an account. Sign in instead.')
+  if (await database.get('SELECT id FROM users WHERE phone = ?', invitation.phone)) {
+    return sendError(response, 409, 'PHONE_ALREADY_REGISTERED', 'This phone number already has an account. Sign in instead.')
   }
 
   const { salt, hash } = hashPassword(password)
@@ -165,17 +171,17 @@ app.post('/api/collector/accept-invitation', async (request, response) => {
   try {
     const userId = await database.transaction(async (tx) => {
       const result = await tx.run(`
-        INSERT INTO users (email, password_salt, password_hash, role, created_at)
-        VALUES (?, ?, ?, 'agent', ?)
-      `, [invitation.email, salt, hash, now])
+        INSERT INTO users (email, name, phone, password_salt, password_hash, role, created_at)
+        VALUES (?, ?, ?, ?, ?, 'agent', ?)
+      `, [invitation.email, invitation.name, invitation.phone, salt, hash, now])
       const consumed = await tx.run('UPDATE agent_invitations SET used_at = ? WHERE id = ? AND used_at IS NULL', [now, invitation.id])
       if (consumed.changes !== 1) throw new Error('Invitation was already used.')
       return Number(result.lastInsertRowid)
     })
     await issueSession(userId, response)
-    return response.status(201).json({ status: 'success', user: { id: userId, email: invitation.email, role: 'agent' } })
+    return response.status(201).json({ status: 'success', user: { id: userId, email: invitation.email, name: invitation.name, phone: invitation.phone, role: 'agent' } })
   } catch (error) {
-    if (String(error).includes('UNIQUE constraint failed') || error?.code === '23505') return sendError(response, 409, 'EMAIL_ALREADY_REGISTERED', 'This email already has an account. Sign in instead.')
+    if (String(error).includes('UNIQUE constraint failed') || error?.code === '23505') return sendError(response, 409, 'PHONE_ALREADY_REGISTERED', 'This phone number already has an account. Sign in instead.')
     console.error('Could not accept collector invitation:', error instanceof Error ? error.message : 'Unknown error')
     return sendError(response, 500, 'INVITATION_SETUP_FAILED', 'The account could not be created. Please request a new invitation.')
   }
@@ -230,11 +236,11 @@ app.post('/api/collector/observations', agentOnly, async (request, response) => 
 
 app.get('/api/admin/collectors', async (_request, response) => {
   const collectors = await database.all(`
-    SELECT id, email, is_active AS isActive, created_at AS createdAt, last_login_at AS lastLoginAt
+    SELECT id, email, name, phone, is_active AS isActive, created_at AS createdAt, last_login_at AS lastLoginAt
     FROM users WHERE role = 'agent' ORDER BY created_at DESC
   `)
   const invitations = await database.all(`
-    SELECT email, created_at AS createdAt, expires_at AS expiresAt
+    SELECT email, name, phone, created_at AS createdAt, expires_at AS expiresAt
     FROM agent_invitations WHERE used_at IS NULL AND expires_at > ? ORDER BY created_at DESC
   `, Date.now())
   response.json({ status: 'success', collectors, invitations })
@@ -281,7 +287,7 @@ app.get('/api/admin/market-observations', async (_request, response) => {
     SELECT observations.id, observations.market_name AS marketName, observations.city,
       observations.availability, observations.price_min AS priceMin, observations.price_max AS priceMax,
       observations.price_unit AS priceUnit, observations.comment, observations.observed_at AS observedAt,
-      commodities.name AS commodity, users.email AS agentEmail
+      commodities.name AS commodity, COALESCE(users.name, users.email, users.phone) AS agentName
     FROM market_observations AS observations
     JOIN commodities ON commodities.id = observations.commodity_id
     JOIN users ON users.id = observations.agent_id
